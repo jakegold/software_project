@@ -22,6 +22,7 @@ config = {
 }
 firebase = pyrebase.initialize_app(config)
 db = firebase.database()
+st = firebase.storage()
 
 def login_required(f):
     @wraps(f)
@@ -123,15 +124,17 @@ def registerAuth():
 
     user = {
         'name': fname + ' ' + lname,
-        'email': email,
+        'email': email.lower(),
         'hash': hash,
         'school': school,
         'rating':"5",
+        'num_of_ratings':"0"
     }
     try:
         user_id = make_unique_id(email)
         db.child("users").child(user_id).set(user)
         db.child("favorites").child(user_id).set({"placeholder":1})
+        db.child("messages").child(user_id).set({"placeholder":"placeholder"})
     except Exception as err:
         return render_template('register.html', error=err)
     session['username'] = email
@@ -211,11 +214,13 @@ def post():
         filename = secure_filename(photo.filename)
         os.chmod(app.config["PHOTO_DIRECTORY"], 0o775)
         newfilename = uuid.uuid4().hex
-        photo.save(os.path.join(app.config["PHOTO_DIRECTORY"], newfilename))
-
+        local_path = os.path.join(app.config["PHOTO_DIRECTORY"], newfilename)
+        photo.save(local_path)
+        token = st.child("images/"+newfilename+".png").put(local_path)
+        filepath = st.child("images/"+newfilename+".png").get_url(token['downloadTokens'])
     
     user = db.child("users").child(make_unique_id(uname)).get().val()
-    ad = { "title": title, "description": description, "photo": newfilename, "date": date, "name":user["name"], "username": uname, "current_price":starting_price, "current_bidder": "None", "comments": {"placeholder":{"username":"placeholder", "text":"placeholder", "time": "placeholder", "name": "placeholder"} } }
+    ad = { "title": title, "description": description, "photo": filepath, "date": date, "name":user["name"], "username": uname, "current_price":starting_price, "current_bidder": "None", "comments": {"placeholder":{"username":"placeholder", "text":"placeholder", "time": "placeholder", "name": "placeholder"} } }
     db.child("ads").push(ad)
     
     return redirect(url_for('home'))
@@ -223,8 +228,54 @@ def post():
 @app.route('/chat')
 @login_required
 def chat():
+    uname = session['username']
+    data = db.child("users").get().val()
+    my_profile = data[make_unique_id(uname)]
+    del data[make_unique_id(uname)]
+    all_profiles = []
+    for key, value in data.items():
+        if(key!="placeholder"):
+            value["id"]=key
+            all_profiles.append(value)
+    
+    messages = db.child("messages").child(make_unique_id(uname)).get().val()
+    all_chats=[]
+    for key, value in messages.items():
+        if(key!="placeholder"):
+            all_chats.append(value)
 
-    return render_template('chat.html')
+
+    return render_template('chat.html', userid = make_unique_id(uname), users=all_profiles, fname=get_fname(), chats = all_chats)
+
+@app.route('/startChat', methods=['POST'])
+@login_required
+def addChat():
+    uname = session['username']
+    uname = make_unique_id(uname)
+    userSelected = request.form['user']
+    
+    text = request.form['message']
+    
+    openChats = db.child("messages").child(uname).get().val()
+    for key, usersMessaged in openChats.items():
+        if usersMessaged == userSelected:
+            flash("Conversation with user already started!", "warning")
+            return redirect(url_for('chat'))
+
+    user_temp = db.child("users").child(userSelected).get().val()
+    user_name = user_temp["name"]
+    db.child("messages").child(uname).child(userSelected).child("name").set(user_name)
+
+    userSelected_temp = db.child("users").child(uname).get().val()
+    userSelected_name = userSelected_temp["name"]
+    db.child("messages").child(userSelected).child(uname).child("name").set(userSelected_name)
+
+    message = { "sender":userSelected, "sendername": userSelected_name, "receiver":uname, "receivername": user_name,  "message": text, "time": time.strftime("%m-%d-%y %H:%M")}
+
+    db.child("messages").child(uname).child(userSelected).push(message)
+    db.child("messages").child(userSelected).child(uname).push(message)
+
+    return redirect(url_for('chat'))
 
 @app.route('/postdel', methods=['GET'])
 @login_required
@@ -239,17 +290,6 @@ def postdel():
     else:
         db.child("ads").child(id).remove()
     return redirect(url_for('home'))
-
-
-# Retrieve user photos only if logged in
-@app.route('/content/<path:filename>')
-def retrieve_file(filename):
-    if not authenticated():
-        abort(404)
-
-    uname = session['username']
-    return send_from_directory(app.config['PHOTO_DIRECTORY'], filename)
-
 
 @app.route('/comment', methods=['POST'])
 @login_required
@@ -299,113 +339,16 @@ def profiles():
 @app.route('/rateUser', methods= ['POST'])
 @login_required
 def rateUser():
-    rating = request.form['rating']
+    rating = int(request.form['rating'])
     user_id = request.form['id']
-    db.child("users").child(user_id).update({"rating":rating})
+    user = db.child("users").child(user_id).get().val()
+    current_rating = int(user["rating"])
+    num_of_ratings = int(user["num_of_ratings"])
+    new_rating = ((current_rating*num_of_ratings)+rating)/(num_of_ratings+1)
+    num_of_ratings += 1
+    db.child("users").child(user_id).update({"rating":str(round(new_rating)), "num_of_ratings":str(num_of_ratings)})
     return redirect(url_for('profiles'))
 
-# @app.route('/tag', methods=['POST'])
-# @login_required
-# def tag():
-#     uname = session['username']
-
-#     taggee = request.form['taggee']
-#     id = request.form['id']
-
-
-#     q = """
-#         INSERT INTO Tag(username_tagger, username_taggee, id, status)
-#         VALUES (%s, %s, %s, %s)
-#         """
-
-#     if uname == taggee:
-#         with conn.cursor() as cursor:
-#             cursor.execute(q, (uname, uname, id, 1))
-#         conn.commit()
-#     else:
-#         #verify the taggee is valid
-#         v = """
-#             SELECT id
-#             FROM Content
-#             WHERE id = %s
-#             AND (
-#                 public
-#                 OR id IN (
-#                     SELECT id
-#                     FROM Share JOIN Member ON
-#                     Share.username = Member.username_creator
-#                     AND Share.group_name = Member.group_name
-#                     Where Member.username = %s
-#                 )
-#             )
-#             """
-#         with conn.cursor() as cursor:
-#             cursor.execute(v, (id, taggee))
-#             res = cursor.fetchone()
-
-#         if res:
-#             try:
-#                 with conn.cursor() as cursor:
-#                     cursor.execute(q, (uname, taggee, id, 0))
-#                 conn.commit()
-#             except pymysql.err.IntegrityError:
-#                 e = """
-#                 {} is already tagged.
-#                 """.format(taggee)
-#                 flash(e, "danger")
-#         else:
-#             e = """
-#                 Not a valid tag. {} cannot view that item.
-#                 """.format(taggee)
-#             flash(e, "danger")
-
-
-#     return redirect(url_for('home'))
-
-# @app.route('/share', methods=['POST'])
-# @login_required
-# def share():
-#     uname = session['username']
-#     groupinfo = request.form['group_info']
-#     group, creator = groupinfo.split("^^^")
-#     id = request.form['id']
-
-#     q = """
-#         SELECT username
-#         FROM Content
-#         WHERE id = %s
-#         """
-
-#     with conn.cursor() as cursor:
-#         cursor.execute(q, (id))
-#         data = cursor.fetchone()
-
-#     if not data:
-#         abort(403)
-#     elif data['username'] != uname:
-#         flash("You cannot share other users content.", "danger")
-#         return redirect(url_for('home'))
-
-#     q = """
-#         INSERT INTO Share(id, group_name, username)
-#         VALUES (%s, %s, %s)
-#         """
-
-#     try:
-#         with conn.cursor() as cursor:
-#             cursor.execute(q, (id, group, creator))
-#         conn.commit()
-#         m = """
-#             Item successfully shared.
-#             """
-#         flash(m, 'success')
-#     except pymysql.err.IntegrityError:
-#         m = """
-#             The item is already shared with that group.
-#             """
-#         flash(m, "warning")
-
-#     return redirect(url_for('home'))
 
 @app.route('/bid', methods=['POST'])
 @login_required
