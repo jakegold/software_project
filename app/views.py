@@ -15,10 +15,10 @@ import time
 import pyrebase
 
 config = {
-    "apiKey": "AIzaSyB4F-ap3T8z1xdRmwWSvMXYBqrBfdh8_BQ",
-    "authDomain": "unibid-fba8a.firebaseapp.com",
-    "databaseURL": "https://unibid-fba8a.firebaseio.com/",
-    "storageBucket": "unibid-fba8a.appspot.com"
+    "apiKey": "API KEY GOES HERE",
+    "authDomain": "AUTH DOMAIN GOES HERE",
+    "databaseURL": "DATA BASE URL GOES HERE",
+    "storageBucket": "STORAGE BUCKET GOES HERE"
 }
 firebase = pyrebase.initialize_app(config)
 db = firebase.database()
